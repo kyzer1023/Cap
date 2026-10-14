@@ -1173,4 +1173,110 @@ mod tests {
         let rows_done = progress.rows_completed.load(Ordering::Relaxed);
         assert!(rows_done < height as usize);
     }
+
+    #[test]
+    #[ignore]
+    fn benchmark_nv12_scalar_vs_simd() {
+        use std::{hint::black_box, time::Instant};
+
+        for (name, width, height) in [
+            ("1080p", 1920u32, 1080u32),
+            ("4k", 3840, 2160),
+            ("preview-1248x702", 1248, 702),
+        ] {
+            let y_stride = width;
+            let uv_stride = width;
+            let y_data: Vec<u8> = (0..y_stride * height).map(|i| (i % 256) as u8).collect();
+            let uv_data: Vec<u8> = (0..uv_stride * height / 2)
+                .map(|i| ((i + 64) % 256) as u8)
+                .collect();
+            let mut scalar_out = vec![0u8; (width * height * 4) as usize];
+            let mut simd_out = vec![0u8; (width * height * 4) as usize];
+            nv12_to_rgba(
+                &y_data,
+                &uv_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut scalar_out,
+            );
+            nv12_to_rgba_simd(
+                &y_data,
+                &uv_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut simd_out,
+            );
+            for (s, d) in scalar_out.iter().zip(&simd_out) {
+                assert!((*s as i32 - *d as i32).abs() <= 2);
+            }
+            let mut scalar_ns = Vec::new();
+            let mut simd_ns = Vec::new();
+            for sample in 0..16 {
+                scalar_out.fill(0);
+                simd_out.fill(0);
+                let (first, second) = if sample % 2 == 0 {
+                    let start = Instant::now();
+                    nv12_to_rgba(
+                        black_box(&y_data),
+                        black_box(&uv_data),
+                        width,
+                        height,
+                        y_stride,
+                        uv_stride,
+                        black_box(&mut scalar_out),
+                    );
+                    let scalar = start.elapsed().as_nanos();
+                    let start = Instant::now();
+                    nv12_to_rgba_simd(
+                        black_box(&y_data),
+                        black_box(&uv_data),
+                        width,
+                        height,
+                        y_stride,
+                        uv_stride,
+                        black_box(&mut simd_out),
+                    );
+                    (scalar, start.elapsed().as_nanos())
+                } else {
+                    let start = Instant::now();
+                    nv12_to_rgba_simd(
+                        black_box(&y_data),
+                        black_box(&uv_data),
+                        width,
+                        height,
+                        y_stride,
+                        uv_stride,
+                        black_box(&mut simd_out),
+                    );
+                    let simd = start.elapsed().as_nanos();
+                    let start = Instant::now();
+                    nv12_to_rgba(
+                        black_box(&y_data),
+                        black_box(&uv_data),
+                        width,
+                        height,
+                        y_stride,
+                        uv_stride,
+                        black_box(&mut scalar_out),
+                    );
+                    (start.elapsed().as_nanos(), simd)
+                };
+                if sample >= 4 {
+                    scalar_ns.push(first);
+                    simd_ns.push(second);
+                }
+            }
+            scalar_ns.sort();
+            simd_ns.sort();
+            println!(
+                "{name} scalar_ns={} simd_ns={}",
+                scalar_ns[scalar_ns.len() / 2],
+                simd_ns[simd_ns.len() / 2]
+            );
+        }
+    }
 }
