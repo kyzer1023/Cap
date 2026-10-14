@@ -25,24 +25,21 @@ pub fn unpad_rgba_to_bgra(
     }
 
     let mut tight = Vec::with_capacity(output_len);
-    let dest = &mut tight.spare_capacity_mut()[..output_len];
-    for (source, target) in data
-        .chunks_exact(stride)
-        .zip(dest.chunks_exact_mut(row_bytes))
-        .take(rows)
-    {
-        for (source, target) in source[..row_bytes]
-            .chunks_exact(4)
-            .zip(target.chunks_exact_mut(4))
-        {
-            target[0].write(source[2]);
-            target[1].write(source[1]);
-            target[2].write(source[0]);
-            target[3].write(source[3]);
-        }
-    }
-    // SAFETY: every output byte was written in the loops above.
+    let dest: *mut u8 = tight.as_mut_ptr();
+    // SAFETY: dest is unused spare capacity; every output byte is written before set_len.
     unsafe {
+        for row in 0..rows {
+            let src = data.as_ptr().add(row * stride);
+            let dst = dest.add(row * row_bytes);
+            for col in 0..width {
+                let s = src.add(col * 4);
+                let d = dst.add(col * 4);
+                *d = *s.add(2);
+                *d.add(1) = *s.add(1);
+                *d.add(2) = *s;
+                *d.add(3) = *s.add(3);
+            }
+        }
         tight.set_len(output_len);
     }
     Some(tight)
