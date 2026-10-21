@@ -115,3 +115,13 @@ Before declaring any task complete, the agent should run the fastest useful chec
 - **Rust**: `cargo fmt --all` and `cargo check -p <crate>` for the touched crate. Add `--all-targets`, `--workspace`, or `cargo clippy -p <crate> --all-targets -- -D warnings` only for explicit requests, CI/PR final validation, or changes that need broader coverage.
 - **TS / JS / JSON / CSS / MD**: prefer scoped checks such as `bun run biome check --write <files>`. Use full `bun run format`, `bun run lint`, and `bun run typecheck` only when explicitly requested or when the change is broad enough to justify it.
 - If a scoped check fails, fix the violation in the source (do NOT suppress with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved). The Pre-Generation Invariants show the correct form for every denied lint.
+
+## Cursor Cloud specific instructions
+
+The Cloud Agent environment already starts MySQL, MinIO, the media server, and the Next.js app. Do not start a second copy, and do not run `bun run dev`, `bun run dev:web`, `bun run dev:desktop`, or `bun run docker:up`.
+
+- Web app: `http://127.0.0.1:3000` (tmux session `cap-web`). Media server health: `http://127.0.0.1:3456/health` (tmux session `cap-media`). MySQL: `mysql://root:@127.0.0.1:3306/planetscale`. MinIO: `http://127.0.0.1:9000`, bucket `capso`, access key `capS3root`, secret `capS3root`.
+- `.env` is generated for that local Docker profile and is gitignored. `bun run env-setup` is interactive; do not run it here.
+- `packages/local-docker/docker-compose.yml` also builds `cap-media-server`. That image runs the media-server test suite during `docker build`, and container-to-container traffic on the Docker bridge times out with this VM's fuse-overlayfs daemon. Published host ports work, so boot creates the bucket from the host and runs the media server with `bun` on the host.
+- With `RESEND_API_KEY` unset, email login codes are printed in the `cap-web` tmux pane. Schema push runs on boot only when the `users` table is missing; a second `drizzle-kit push` can emit invalid index SQL, so re-push by hand only when the schema actually changed.
+- The desktop app is not started. Screen capture targets macOS and Windows. Rust 1.88 and `libssl-dev` are installed. Smoke checks: `cargo test -p cap-cursor-info`, and `cd apps/web && bun run test -- __tests__/unit/transcript-text.test.ts`.
