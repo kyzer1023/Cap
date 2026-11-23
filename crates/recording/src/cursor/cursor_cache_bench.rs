@@ -700,3 +700,179 @@ fn measure_live_cursor_in(display: &str, hold_so: &str, iterations: u32, dir: &P
     })
 }
 
+#[cfg(test)]
+mod xsetroot_hotspot {
+    use super::super::{CursorActorResponse, CursorSample, X11CursorSource, cursor_id_for_image};
+    use super::{HeldXsetroot, checker, write_xbm};
+    use cap_project::XY;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Child, Command, Stdio};
+
+    struct Xvfb {
+        child: Child,
+        number: u32,
+    }
+
+    impl Xvfb {
+        fn start() -> Option<Self> {
+            let (reader, writer) = std::io::pipe().ok()?;
+            let child = Command::new("Xvfb")
+                .args([
+                    "-displayfd",
+                    "1",
+                    "-screen",
+                    "0",
+                    "640x480x24",
+                    "-nolisten",
+                    "tcp",
+                ])
+                .stdin(Stdio::null())
+                .stdout(writer)
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()?;
+            let mut line = String::new();
+            let Some(number) = BufReader::new(reader)
+                .read_line(&mut line)
+                .ok()
+                .and_then(|_| line.trim().parse().ok())
+            else {
+                let mut child = child;
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            };
+            Some(Self { child, number })
+        }
+
+        fn display(&self) -> String {
+            format!(":{}", self.number)
+        }
+    }
+
+    impl Drop for Xvfb {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn tool_exists(name: &str) -> bool {
+        Command::new("sh")
+            .args(["-c", &format!("command -v {name}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    fn hold_library() -> Option<std::path::PathBuf> {
+        let src =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/x11-cursor-hold.c");
+        let out = std::env::temp_dir().join(format!(
+            "cap-x11-cursor-hold-test-{}.so",
+            std::process::id()
+        ));
+        let compiled = Command::new("gcc")
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&out)
+            .arg(&src)
+            .args(["-ldl", "-lX11"])
+            .status()
+            .is_ok_and(|status| status.success());
+        compiled.then_some(out)
+    }
+
+    fn connected(display: &str) -> X11CursorSource {
+        use x11rb::protocol::xfixes::ConnectionExt as _;
+        let (connection, _) = x11rb::connect(Some(display)).unwrap();
+        connection
+            .xfixes_query_version(5, 0)
+            .unwrap()
+            .reply()
+            .unwrap();
+        X11CursorSource {
+            connection: Some(connection),
+            last_image: None,
+        }
+    }
+
+    #[test]
+    fn an_xsetroot_hotspot_change_keeps_the_new_hotspot() {
+        if !tool_exists("Xvfb")
+            || !tool_exists("xsetroot")
+            || !tool_exists("xdotool")
+            || !tool_exists("gcc")
+        {
+            eprintln!("skipping live X11 cursor test, a required tool is missing");
+            return;
+        }
+        let Some(server) = Xvfb::start() else {
+            eprintln!("skipping live X11 cursor test, Xvfb did not start");
+            return;
+        };
+        let Some(hold_so) = hold_library() else {
+            eprintln!("skipping live X11 cursor test, gcc could not build the hold library");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mask = dir.path().join("mask.xbm");
+        let shape = dir.path().join("shape.xbm");
+        let moved = dir.path().join("moved.xbm");
+        write_xbm(&mask, "mask", 16, 0, 0, |_, _| true).unwrap();
+        write_xbm(&shape, "shape", 16, 3, 4, checker).unwrap();
+        write_xbm(&moved, "moved", 16, 9, 1, checker).unwrap();
+
+        let display = server.display();
+        let held =
+            HeldXsetroot::start(&display, &hold_so.to_string_lossy(), &shape, &mask).unwrap();
+        let mut source = connected(&display);
+        let first = source.cursor_data(None).unwrap();
+        let CursorSample::Read {
+            fingerprint,
+            data: Some(data),
+        } = first
+        else {
+            panic!("xsetroot cursor was not read");
+        };
+        assert_eq!(data.hotspot, XY::new(3.0 / 16.0, 4.0 / 16.0));
+        let first_png = data.image.clone();
+        let mut response = CursorActorResponse {
+            cursors: Default::default(),
+            next_cursor_id: 0,
+            moves: Vec::new(),
+            clicks: Vec::new(),
+            keyboard_presses: Vec::new(),
+        };
+        let mut last = None;
+        let first_id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+        let known = last.as_ref().and(fingerprint);
+        assert!(known.is_some());
+        assert!(matches!(
+            source.cursor_data(known.as_ref()).unwrap(),
+            CursorSample::Unchanged
+        ));
+        drop(held);
+
+        let held =
+            HeldXsetroot::start(&display, &hold_so.to_string_lossy(), &moved, &mask).unwrap();
+        let second = source.cursor_data(known.as_ref()).unwrap();
+        let CursorSample::Read {
+            data: Some(data), ..
+        } = second
+        else {
+            panic!("same xsetroot pixels with a new hotspot were treated as unchanged");
+        };
+        assert_eq!(data.hotspot, XY::new(9.0 / 16.0, 1.0 / 16.0));
+        assert_eq!(data.image, first_png);
+        let second_id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+        assert_ne!(first_id, second_id);
+        let recorded = response
+            .cursors
+            .values()
+            .find(|cursor| cursor.id.to_string() == second_id)
+            .unwrap();
+        assert_eq!(recorded.hotspot, XY::new(9.0 / 16.0, 1.0 / 16.0));
+        drop(held);
+    }
+}

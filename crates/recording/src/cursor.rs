@@ -1149,13 +1149,23 @@ struct CursorFingerprint {
     hotspot: (u64, u64),
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+#[derive(PartialEq)]
+struct CursorFingerprint {
+    width: u16,
+    height: u16,
+    xhot: u16,
+    yhot: u16,
+    pixels: Vec<u32>,
+}
+
+#[cfg(windows)]
 #[derive(PartialEq)]
 struct CursorFingerprint;
 
 enum CursorSample {
     /// The cursor still matches the fingerprint of the last registered image.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(windows, allow(dead_code))]
     Unchanged,
     Read {
         fingerprint: Option<CursorFingerprint>,
@@ -1163,12 +1173,17 @@ enum CursorSample {
     },
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 fn sample_cursor(_known: Option<&CursorFingerprint>) -> CursorSample {
     CursorSample::Read {
         fingerprint: None,
         data: get_cursor_data(),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn sample_cursor(known: Option<&CursorFingerprint>) -> CursorSample {
+    get_cursor_data(known)
 }
 
 /// One read of the current cursor per tick: its fingerprint, and its encoded
@@ -1352,14 +1367,18 @@ mod macos_cursor_tests {
 }
 
 #[cfg(target_os = "linux")]
-fn get_cursor_data() -> Option<CursorData> {
+fn get_cursor_data(known: Option<&CursorFingerprint>) -> CursorSample {
     thread_local! {
         static X11_CURSOR: std::cell::RefCell<X11CursorSource> = std::cell::RefCell::default();
     }
 
-    X11_CURSOR
-        .with_borrow_mut(X11CursorSource::cursor_data)
-        .or_else(fallback_cursor_data)
+    match X11_CURSOR.with_borrow_mut(|source| source.cursor_data(known)) {
+        Some(sample) => sample,
+        None => CursorSample::Read {
+            fingerprint: None,
+            data: fallback_cursor_data(),
+        },
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1379,22 +1398,60 @@ struct X11CursorImage {
 
 #[cfg(target_os = "linux")]
 impl X11CursorSource {
-    fn cursor_data(&mut self) -> Option<CursorData> {
+    fn cursor_data(&mut self, known: Option<&CursorFingerprint>) -> Option<CursorSample> {
         let cursor = self.cursor_image()?;
+        if cursor.width == 0 || cursor.height == 0 {
+            return None;
+        }
+        self.sample_bitmap(
+            cursor.width,
+            cursor.height,
+            cursor.xhot,
+            cursor.yhot,
+            cursor.cursor_image,
+            known,
+        )
+    }
 
-        let width = u32::from(cursor.width);
-        let height = u32::from(cursor.height);
+    fn sample_bitmap(
+        &mut self,
+        width: u16,
+        height: u16,
+        xhot: u16,
+        yhot: u16,
+        pixels: Vec<u32>,
+        known: Option<&CursorFingerprint>,
+    ) -> Option<CursorSample> {
         if width == 0 || height == 0 {
             return None;
         }
+        if let Some(known) = known
+            && known.width == width
+            && known.height == height
+            && known.xhot == xhot
+            && known.yhot == yhot
+            && known.pixels == pixels
+        {
+            return Some(CursorSample::Unchanged);
+        }
 
-        Some(CursorData {
-            image: self.png(cursor.width, cursor.height, cursor.cursor_image)?,
-            hotspot: XY::new(
-                f64::from(cursor.xhot) / f64::from(width),
-                f64::from(cursor.yhot) / f64::from(height),
-            ),
-            shape: None,
+        let image = self.png(width, height, pixels.clone())?;
+        Some(CursorSample::Read {
+            fingerprint: Some(CursorFingerprint {
+                width,
+                height,
+                xhot,
+                yhot,
+                pixels,
+            }),
+            data: Some(CursorData {
+                image,
+                hotspot: XY::new(
+                    f64::from(xhot) / f64::from(width),
+                    f64::from(yhot) / f64::from(height),
+                ),
+                shape: None,
+            }),
         })
     }
 
@@ -1505,7 +1562,10 @@ fn linux_cursor_png() -> Vec<u8> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod x11_cursor_tests {
-    use super::{X11CursorSource, x11_cursor_png};
+    use super::{
+        CursorActorResponse, CursorSample, X11CursorSource, cursor_id_for_image, x11_cursor_png,
+    };
+    use cap_project::XY;
 
     #[test]
     fn cached_cursor_pngs_match_a_fresh_encode() {
@@ -1538,6 +1598,83 @@ mod x11_cursor_tests {
     fn cursor_with_mismatched_pixel_count_is_skipped() {
         let mut source = X11CursorSource::default();
         assert_eq!(source.png(2, 2, vec![0; 3]), None);
+    }
+
+    fn empty_response() -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Default::default(),
+            next_cursor_id: 0,
+            moves: Vec::new(),
+            clicks: Vec::new(),
+            keyboard_presses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_hotspot_change_with_the_same_pixels_keeps_the_new_hotspot() {
+        let mut source = X11CursorSource::default();
+        let pixels = vec![0xff11_2233; 4];
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+
+        let first = source
+            .sample_bitmap(2, 2, 0, 1, pixels.clone(), None)
+            .unwrap();
+        let CursorSample::Read {
+            fingerprint,
+            data: Some(data),
+        } = first
+        else {
+            panic!("first cursor was not read");
+        };
+        assert_eq!(data.hotspot, XY::new(0.0, 0.5));
+        let first_id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+        let known = last.as_ref().and(fingerprint);
+        assert!(known.is_some());
+        let recorded = response
+            .cursors
+            .values()
+            .find(|cursor| cursor.id.to_string() == first_id)
+            .unwrap();
+        assert_eq!(recorded.hotspot, XY::new(0.0, 0.5));
+
+        let second = source
+            .sample_bitmap(2, 2, 1, 1, pixels.clone(), known.as_ref())
+            .unwrap();
+        let CursorSample::Read {
+            fingerprint,
+            data: Some(data),
+        } = second
+        else {
+            panic!("same pixels with a new hotspot were treated as unchanged");
+        };
+        assert_eq!(data.hotspot, XY::new(0.5, 0.5));
+        let second_png = data.image.clone();
+        let second_id = cursor_id_for_image(data, &mut response, dir.path(), None, &mut last);
+        assert_ne!(first_id, second_id);
+        let recorded = response
+            .cursors
+            .values()
+            .find(|cursor| cursor.id.to_string() == second_id)
+            .unwrap();
+        assert_eq!(recorded.hotspot, XY::new(0.5, 0.5));
+        let known = last.as_ref().and(fingerprint);
+
+        let third = source
+            .sample_bitmap(2, 2, 1, 1, pixels, known.as_ref())
+            .unwrap();
+        assert!(matches!(third, CursorSample::Unchanged));
+        let recorded = response
+            .cursors
+            .values()
+            .find(|cursor| cursor.id.to_string() == second_id)
+            .unwrap();
+        assert_eq!(recorded.hotspot, XY::new(0.5, 0.5));
+        assert_eq!(
+            std::fs::read(dir.path().join(format!("cursor_{second_id}.png"))).unwrap(),
+            second_png
+        );
     }
 }
 
