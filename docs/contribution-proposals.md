@@ -2,6 +2,28 @@
 
 Proposals only. Nothing here is implemented. Ranked by value × confidence across two scans (Windows/GPU and shared/Linux). Line refs are at `4102c569fbee7064997b944b61a205da6d60100f`. No benchmarks were run in these scans; values are estimates or cite earlier PRs.
 
+## Status board
+
+Board rules: fork-only draft, never opened upstream, never merged. Each scan syncs this branch to upstream main and updates this file. Implementation needs Kyzer's pick first. Status values: proposed / approved / in-progress / upstream PR / merged / dropped.
+
+| # | Proposal | Platform | Status | Upstream PR |
+|---|---|---|---|---|
+| 1 | Default Windows recording on GPU texture path | Windows | proposed | — |
+| 2 | Wayland pointer events for auto zoom/hover | Linux | proposed | — |
+| 3 | Untagged video decodes as BT.709 in editor/export | Shared | proposed | — |
+| 4 | MF encode BT.709 limited tagging fix | Windows | proposed | — |
+| 5 | Linux camera converter via convert_or_scale + BT.709 | Linux | proposed | — |
+| 6 | Keep recording when MF dies mid-take | Windows | proposed | — |
+| 7 | macOS: never hand SCK surface back to writer | macOS | proposed | — |
+| 8 | Linux Audio Only stops when system audio dies | Linux | proposed | — |
+| 9 | Measure Full preview on Windows/Linux | Windows+Linux | proposed | — |
+| 10 | X11 cursor shape fingerprint | Linux X11 | proposed | — |
+| 11 | Reuse MF input sample | Windows | proposed | — |
+
+## Scan history
+
+- **2026-11-23** — upstream `4102c569`. Two Cursor cloud scans (Windows/GPU, shared/Linux), re-scoped to Richie's direction since Oct 20. 11 proposals added; muxer unlock and banded swscale closed. No benchmarks run.
+
 ## Richie's direction since Oct 20
 
 ### From the Windows/GPU scan
