@@ -1,27 +1,35 @@
-# Cap contribution proposals (scan of upstream `4102c569`, 2026-11-23)
+# Cap contribution proposals
 
-Proposals only. Nothing here is implemented. Ranked by value × confidence across two scans (Windows/GPU and shared/Linux). Line refs are at `4102c569fbee7064997b944b61a205da6d60100f`. No benchmarks were run in these scans; values are estimates or cite earlier PRs.
+This fork-only draft tracks candidate contributions. Each scan syncs the board branch to upstream main. Kyzer selects proposals for implementation separately. A proposal can be proposed, approved, in progress, in an upstream PR, merged, or dropped.
 
 ## Status board
 
-Board rules: fork-only draft, never opened upstream, never merged. Each scan syncs this branch to upstream main and updates this file. Implementation needs Kyzer's pick first. Status values: proposed / approved / in-progress / upstream PR / merged / dropped.
+Rank is the recommended order to start work. The ID is the original proposal number and stays fixed across scans. The ranking reflects user impact, recent upstream decisions, and what a reviewer can verify. [Upstream reviewed on November 23, 2026](https://github.com/CapSoftware/Cap/commit/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7).
 
-| # | Proposal | Platform | Status | Upstream PR |
-|---|---|---|---|---|
-| 1 | Default Windows recording on GPU texture path | Windows | proposed | — |
-| 2 | Wayland pointer events for auto zoom/hover | Linux | proposed | — |
-| 3 | Untagged video decodes as BT.709 in editor/export | Shared | proposed | — |
-| 4 | MF encode BT.709 limited tagging fix | Windows | proposed | — |
-| 5 | Linux camera converter via convert_or_scale + BT.709 | Linux | proposed | — |
-| 6 | Keep recording when MF dies mid-take | Windows | proposed | — |
-| 7 | macOS: never hand SCK surface back to writer | macOS | proposed | — |
-| 8 | Linux Audio Only stops when system audio dies | Linux | proposed | — |
-| 9 | Measure Full preview on Windows/Linux | Windows+Linux | proposed | — |
-| 10 | X11 cursor shape fingerprint | Linux X11 | proposed | — |
-| 11 | Reuse MF input sample | Windows | proposed | — |
+| Rank | ID | Proposal | Status | First verification |
+| --- | --- | --- | --- | --- |
+| 1 | 3 | Untagged video color in the editor and export | Proposed | Compare a genuinely untagged HD clip across editor, export, and share GIF. Include untagged 480p and explicitly tagged BT.601 controls. [GIF fix](https://github.com/CapSoftware/Cap/pull/4471) · [SD import rule](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/apps/desktop-gpui/src/import.rs#L1977) |
+| 2 | 9 | Full editor preview on Windows and Linux | Proposed | Compare Half and Full on the same project with the existing latency benchmark. Start with the Radeon 780M. [Upstream benchmark](https://github.com/CapSoftware/Cap/pull/4392) |
+| 3 | 4 | BT.709 conversion and tags in the Windows hardware encoder | Proposed | Encode a known color patch on a currently enabled Media Foundation encoder. Check decoded pixels and file tags together. [AMD measurements](https://github.com/CapSoftware/Cap/pull/3223) |
+| 4 | 6 | Continue a Windows take after a native encoder failure | Proposed | Force Media Foundation to fail mid-take and verify playable video and continuous audio across the switch. [Fragmented FFmpeg recovery already shipped](https://github.com/CapSoftware/Cap/pull/3685) |
+| 5 | 2 | Wayland clicks for automatic zoom | Proposed | Demonstrate a click-only input source with the permissions available to a normal desktop user. PipeWire cursor metadata supplies position and appearance. [KDE report](https://github.com/CapSoftware/Cap/issues/2419) · [Earlier review](https://github.com/CapSoftware/Cap/pull/2420) |
+| 6 | 1 | GPU texture encoding for default Windows Studio recording | Proposed | Extend the existing work to crash-recoverable Studio. Verify pause, resume, recovery, and a playable recording on multiple Windows GPUs. [Instant texture path](https://github.com/CapSoftware/Cap/pull/2940) · [AMD MP4 path](https://github.com/CapSoftware/Cap/pull/3223) |
+| 7 | 10 | Skip redundant X11 cursor processing | Proposed | Measure cached PNG copies and hashing. Test a cursor whose hotspot changes while its pixels stay identical. [X11 cursor cache](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/recording/src/cursor.rs#L1421) |
+| 8 | 7 | Handle a failed screen-frame copy on macOS | Proposed | Reproduce a freeze after a copy failure on a Mac, including when the first frame fails. The current copier passes the original through and retries failed setup. [Upstream fix and review](https://github.com/CapSoftware/Cap/pull/4403) |
+| 9 | 8 | End Linux Audio Only cleanly after permanent system-audio loss | Proposed | Remove the monitor during a take and inspect the saved result. Also test a temporary disconnect and a take with an active mic. Linux already attempts reconnection and propagates terminal failures. [Reconnect handler](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/recording/src/feeds/microphone.rs#L3052) · [Terminal failure](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/recording/src/sources/microphone.rs#L403) |
+| 10 | 11 | Reuse Windows Media Foundation input samples | Proposed | Profile allocations on the texture path and verify that the encoder has released each sample before reuse. [Allocation site](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/enc-mediafoundation/src/video/h264.rs#L615) |
+| 11 | 5 | Change the Linux async camera converter | Dropped as written | Linux Studio uses the FFmpeg muxers for both camera paths. Reopen if a color fixture fails through a shipping path. [Camera-only recording](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/recording/src/studio_recording.rs#L3738) · [Camera track](https://github.com/CapSoftware/Cap/blob/c0f1c186f0f2edd7006b053c7245a42ac0ae6ac7/crates/recording/src/studio_recording.rs#L3963) |
+
+## How to group the work
+
+- **One Windows encoder color PR (ID 4).** Extract the common BT.709 conversion and tagging work from the open fragmented-Instant and AMD MP4 branches. The pixel conversion, the range and matrix written to the output, and the decoded-pixel regression test belong in the same change. The existing PRs can reuse that fix. [#2940](https://github.com/CapSoftware/Cap/pull/2940) · [#3223](https://github.com/CapSoftware/Cap/pull/3223)
+- **One preview benchmark comparison (ID 9).** Use the same project, scenarios, and metrics on Windows and Linux. Report the adapter, playback frame rate, and frame latency at Half and Full. This can run alongside ID 3. Each platform can change its default once its hardware results support it. [#4392](https://github.com/CapSoftware/Cap/pull/4392)
+- **Three Windows PRs in sequence.** Land color correctness (ID 4), then native mid-take recovery (ID 6), then the default Studio GPU route (ID 1). A color chart, an injected encoder failure, and cross-vendor capture runs give each PR its own acceptance test. [Upstream review](https://github.com/CapSoftware/Cap/pull/2940)
+- **Two Linux buffer PRs in sequence.** Land PipeWire buffer lifetime and shutdown first. Rebase the frame pool afterward and keep it for X11 and the owned-copy fallback. [#3317](https://github.com/CapSoftware/Cap/pull/3317) → [#3145](https://github.com/CapSoftware/Cap/pull/3145)
 
 ## Scan history
 
+- **2026-11-23** — Reviewed upstream `c0f1c186f` and maintainer feedback. Reordered the 11 original IDs, grouped the Windows color work and preview benchmarks, and dropped ID 5 as written.
 - **2026-11-23** — upstream `4102c569`. Two Cursor cloud scans (Windows/GPU, shared/Linux), re-scoped to Richie's direction since Oct 20. 11 proposals added; muxer unlock and banded swscale closed. No benchmarks run.
 
 ## Richie's direction since Oct 20
@@ -50,7 +58,9 @@ Richie McIlroy landed essentially every merged PR in this window. The last ten d
 - **The public share page.** Brand colour, custom thumbnails, Spaces, comment-upload size checks ([#4463](https://github.com/CapSoftware/Cap/pull/4463)). The desktop version is stored on the video ([#4331](https://github.com/CapSoftware/Cap/pull/4331)) and stripped from share and embed pages.
 - **Earlier in the window.** Cap Infra (URL import, delivery metering, MCP) around 13 Nov, on-screen drawing, separate-track export, and dashboard bulk actions. That Infra push has cooled; the open work is the recording and how it looks when shared.
 
-## Ranked proposals
+## Original scan notes by proposal ID
+
+These are the findings from the initial scan of `4102c569`. The implementation order and verification criteria above supersede the initial ranking and proposed designs.
 
 ### 1. Put the default Windows recording on the GPU texture path
 
