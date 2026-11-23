@@ -23,9 +23,8 @@ use windows::{
             MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
             MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
-            MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
-            MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
-            MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_FLUSH,
+            MFCreateDXGIDeviceManager, MFCreateMediaType, MFMediaType_Video, MFT_ENUM_FLAG,
+            MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_FLUSH,
             MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
             MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
             MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY,
@@ -365,6 +364,10 @@ impl HevcEncoder {
         mut get_frame: impl FnMut() -> windows::core::Result<Option<(ID3D11Texture2D, TimeSpan)>>,
         mut on_sample: impl FnMut(IMFSample) -> windows::core::Result<()>,
     ) -> windows::core::Result<()> {
+        let frame_duration =
+            crate::input_sample_pool::media_type_frame_duration_hns(&self.output_type)?;
+        let mut input_samples = crate::input_sample_pool::DxgiInputSamples::new();
+
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -386,17 +389,11 @@ impl HevcEncoder {
                             && let Some((texture, timestamp)) = get_frame()?
                         {
                             self.video_processor.process_texture(&texture)?;
-                            let input_buffer = {
-                                MFCreateDXGISurfaceBuffer(
-                                    &ID3D11Texture2D::IID,
-                                    self.video_processor.output_texture(),
-                                    0,
-                                    false,
-                                )?
-                            };
-                            let mf_sample = MFCreateSample()?;
-                            mf_sample.AddBuffer(&input_buffer)?;
-                            mf_sample.SetSampleTime(timestamp.Duration)?;
+                            let mf_sample = input_samples.sample_for(
+                                self.video_processor.output_texture(),
+                                timestamp.Duration,
+                                frame_duration,
+                            )?;
                             self.transform
                                 .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
                             should_exit = false;
