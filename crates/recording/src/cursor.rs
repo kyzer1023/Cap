@@ -1541,6 +1541,13 @@ mod x11_cursor_tests {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod cursor_cache_bench;
+
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use cursor_cache_bench::x11_cursor_cache_bench_report;
+
 #[cfg(windows)]
 fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
